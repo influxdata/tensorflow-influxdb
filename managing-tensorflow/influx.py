@@ -36,7 +36,6 @@ def convert(raw):
     for s in raw['series']:
         # TODO: Possibly add the query as context
         # TODO: Probably add padding to last batch
-        # TODO: Probably add sequence length
         tags = s.get('tags', {})
         columns = s['columns']
         measurement = s['name']
@@ -53,11 +52,11 @@ def convert(raw):
                 features["column/" + col]["data"].append(v)
                 if isinstance(v, float) or isinstance(v, int):
                     features["column/" + col]["type_func"] = _float_feature_list
-                #elif isinstance(v, int):
-                #   # Only update the type function if it has yet to be set.
-                #   # This way the float function can take priority.
-                #   if features["column/" + col]["type_func"] is  None:
-                #        features["column/" + col]["type_func"] = _int64_feature_list
+                elif isinstance(v, int):
+                   # Only update the type function if it has yet to be set.
+                   # This way the float function can take priority.
+                   if features["column/" + col]["type_func"] is  None:
+                        features["column/" + col]["type_func"] = _int64_feature_list
                 else:
                     features["column/" + col]["type_func"] = _bytes_feature_list
 
