@@ -2,61 +2,74 @@ import tensorflow as tf
 import numpy as np
 import threading
 from influx import query_batch, convert
+from tensorflow.python.framework import dtypes
+from tensorflow.contrib import learn as tflearn
+from tensorflow.contrib import layers as tflayers
+from sklearn.metrics import mean_squared_error
+import matplotlib.pyplot as plt
 
-def queue(seq_length, input_size, output_size):
-    # are used to feed data into our queue
-    queue_input_data = tf.placeholder(tf.float32, shape=[seq_length, input_size])
-    queue_input_target = tf.placeholder(tf.float32, shape=[seq_length, output_size])
+def model(X, y):
+    basics = [tf.nn.rnn_cell.BasicLSTMCell(5, state_is_tuple=True)]
+    stacked_lstm = tf.nn.rnn_cell.MultiRNNCell(basics, state_is_tuple=True)
+    x_ = tf.unpack(X, axis=1, num=10)
+    output, layers = tf.nn.rnn(stacked_lstm, x_, dtype=dtypes.float32)
+    output = tflayers.stack(output[-1], tflayers.fully_connected, [10, 10])
+    prediction, loss = tflearn.models.linear_regression(output, y)
+    train_op = tf.contrib.layers.optimize_loss(
+                loss, tf.contrib.framework.get_global_step(), optimizer='Adagrad',
+                learning_rate=0.1)
+    return prediction, loss, train_op
 
-    fifo_queue = tf.FIFOQueue(capacity=1, dtypes=[tf.float32, tf.float32],
-                              shapes=[[input_size], [output_size]])
-
-    enqueue_op = fifo_queue.enqueue_many([queue_input_data, queue_input_target])
-    dequeue_op = fifo_queue.dequeue()
-
-    # tensorflow recommendation:
-    # capacity = min_after_dequeue + (num_threads + a small safety margin) *
-    # batch_size
-    data_batch, target_batch = tf.train.batch(dequeue_op, batch_size=3, capacity=40)
-    return fifo_queue, queue_input_data, queue_input_target, enqueue_op, data_batch, target_batch
-
-def influx(sess, enqueue_op, queue_input_data, queue_input_target, db, query, column):
+def influx(db, query, column):
     for res in query_batch(query, limit=11, offset=0, db=db):
         for s in convert(res.raw):
-            v = np.array(s.feature_lists.feature_list[column].feature[0].float_list.value)
-            data = np.zeros((10,))
+            v = np.array(s.feature_lists.feature_list[column].feature[0].float_list.value, dtype=np.float32)
+            data = np.zeros((10,), dtype=np.float32)
             data[:v.shape[0]-1] = v[:v.shape[0]-1]
-            data = np.array(data).reshape([-1, 10]) 
-            target = np.array(v[-1]).reshape([1, 1])
-            try:
-                sess.run(enqueue_op, feed_dict={queue_input_data: data,
-                                                queue_input_target: target})
-            except tf.errors.CancelledError:
-                break
+            data = np.array(data).reshape([10, -1]) 
+            target = np.array(v[-1])
+            yield data, target
 
 with tf.Session() as sess:
-    fifo_queue, queue_input_data, queue_input_target, enqueue_op, data_batch, target_batch = queue(seq_length=1, input_size=10, output_size=1)
-    sess = tf.Session()
     db = "tensorflowdb"
     query = "select wet_bulb_temp from qclcd where wban = '14920' and time > now() - 30d group by wban"
     column = "column/wet_bulb_temp"
-    enqueue_thread = threading.Thread(target=influx, args=[sess, enqueue_op, queue_input_data, queue_input_target, db, query, column])
-    enqueue_thread.isDaemon()
-    enqueue_thread.start()
+    regressor = tflearn.SKCompat(tflearn.Estimator(model_fn=model))
 
-    coord = tf.train.Coordinator()
-    threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+    inputs = []
+    targets = []
+    for data, target in influx(db, query, column):
+        inputs.append(data)
+        targets.append(target)
 
-    # Fetch the data from the pipeline and put it where it belongs (into your
-    # model)
-    for i in range(32):
-        run_options = tf.RunOptions(timeout_in_ms=4000)
-        curr_data_batch, curr_target_batch = sess.run(
-            [data_batch, target_batch], options=run_options)
-    # shutdown everything to avoid zombies
-    try:
-        sess.run(fifo_queue.close(cancel_pending_enqueues=True))
-        coord.request_stop()
-        coord.join(threads)
-    except tf.errors.CancelledError:
-        pass
+    inputs = np.array(inputs)
+    print(inputs.shape)
+    targets = np.array(targets)
+    print(targets.shape)
+    regressor.fit(inputs, targets,
+            batch_size=20,
+            steps=20)
+    predicted = regressor.predict(inputs)
+    #not used in this example but used for seeing deviations
+    rmse = np.sqrt(((predicted - targets) ** 2).mean(axis=0))
+
+    score = mean_squared_error(predicted, targets)
+    print ("MSE: %f" % score)
+
+    fig, ax = plt.subplots(1)
+    fig.autofmt_xdate()
+
+    predicted_values = predicted.flatten()
+    plot_predicted, = ax.plot(predicted_values, label='predicted (F)')
+
+    test_values = targets.flatten()
+    plot_test, = ax.plot(test_values, label='test (F)')
+
+    plt.title('LSE Weather Predictions')
+    plt.legend(handles=[plot_predicted, plot_test])
+    plt.show()
+
+
+
+
+
