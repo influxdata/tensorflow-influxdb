@@ -51,13 +51,13 @@ def convert(raw):
         for value in s['values']:
             for col, v in zip(columns, value):
                 features["column/" + col]["data"].append(v)
-                if isinstance(v, float):
+                if isinstance(v, float) or isinstance(v, int):
                     features["column/" + col]["type_func"] = _float_feature_list
-                elif isinstance(v, int):
-                    # Only update the type function if it has yet to be set.
-                    # This way the float function can take priority.
-                    if features["column/" + col]["type_func"] is  None:
-                        features["column/" + col]["type_func"] = _int64_feature_list
+                #elif isinstance(v, int):
+                #   # Only update the type function if it has yet to be set.
+                #   # This way the float function can take priority.
+                #   if features["column/" + col]["type_func"] is  None:
+                #        features["column/" + col]["type_func"] = _int64_feature_list
                 else:
                     features["column/" + col]["type_func"] = _bytes_feature_list
 
@@ -75,6 +75,7 @@ def query_batch(q, limit, offset, db, epoch='ms'):
         if not res:
             break
         yield res
+
         offset += limit
 
 if __name__ == "__main__":
